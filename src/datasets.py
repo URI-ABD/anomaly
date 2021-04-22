@@ -6,15 +6,13 @@ from typing import Optional
 from typing import Tuple
 
 import numpy as np
+from pyclam.utils import normalize
 from scipy.io import loadmat
 from scipy.io.matlab.miobase import MatReadError
 
-from pyclam.utils import normalize
 from utils import DATA_DIR
 
-# TODO: Several of these datasets are in sklearn.datasets. Try using those?
-# TODO: Try getting datasets from openml.org by using sklearn.datasets.fetch_openml
-DATASETS: Dict[str, str] = {
+DATASET_LINKS: Dict[str, str] = {
     'annthyroid': 'https://www.dropbox.com/s/aifk51owxbogwav/annthyroid.mat?dl=0',
     'arrhythmia': 'https://www.dropbox.com/s/lmlwuspn1sey48r/arrhythmia.mat?dl=0',
     'breastw': 'https://www.dropbox.com/s/g3hlnucj71kfvq4/breastw.mat?dl=0',
@@ -41,10 +39,59 @@ DATASETS: Dict[str, str] = {
     'wine': 'https://www.dropbox.com/s/uvjaudt2uto7zal/wine.mat?dl=0',
 }
 
+# TODO: Add these datasets:
+OTHER_DATASETS: List[str] = [
+    'backdoor',
+    'campaign',
+    'celeba',
+    'census',
+    'donors',
+    'fraud',
+    'thyroid-21',
+]
+SHORT_NAMES = {
+    'annthyroid': 'ANNTH.',
+    'arrhythmia': 'ARRH.',
+    'breastw': 'BRE.W',
+    'cardio': 'CARD.',
+    'cover': 'COVER',
+    'glass': 'GLASS',
+    'http': 'HTTP',
+    'ionosphere': 'IONO.',
+    'lympho': 'LYMP.',
+    'mammography': 'MAMMO.',
+    'mnist': 'MNIST',
+    'musk': 'MUSK',
+    'optdigits': 'O.DIG.',
+    'pendigits': 'P.DIG.',
+    'pima': 'PIMA',
+    'satellite': 'SATL.',
+    'satimage-2': 'SAT.I-2',
+    'shuttle': 'SHUTTLE',
+    'smtp': 'SMTP.',
+    'thyroid': 'THYR.',
+    'vertebral': 'VERT.',
+    'vowels': 'VOWELS',
+    'wbc': 'WBC',
+    'wine': 'WINE',
+    'backdoor': 'BACKDOOR',
+    'campaign': 'CAMPAIGN',
+    'celeba': 'CELEBA',
+    'census': 'CENSUS',
+    'donors': 'DONORS',
+    'fraud': 'FRAUD',
+    'thyroid-21': 'THYROID-21',
+}
 
-def get(dataset: str) -> str:
+DATASET_NAMES = list(DATASET_LINKS.keys())
+DATASET_NAMES.extend(OTHER_DATASETS)
+
+
+def get(dataset: str):
     """ Download the dataset if needed, and returns the filename used to store it. """
-    link = DATASETS[dataset]
+    link = DATASET_LINKS[dataset]
+    data_path = os.path.join(DATA_DIR, f'{dataset}.npy')
+    labels_path = os.path.join(DATA_DIR, f'{dataset}_labels.npy')
 
     if not os.path.exists(DATA_DIR):
         os.makedirs(DATA_DIR, exist_ok=True)
@@ -56,7 +103,26 @@ def get(dataset: str) -> str:
     if not os.path.exists(filename):
         raise ValueError(f'Could not get dataset {dataset}.')
 
-    return filename
+    if dataset in DATASET_LINKS:
+        data_dict: Dict = dict()
+        try:
+            data_dict = loadmat(filename)
+        except (NotImplementedError, MatReadError):
+            import h5py
+            # noinspection PyUnresolvedReferences
+            with h5py.File(filename, 'r') as fp:
+                for k, v in fp.items():
+                    if k in ['X', 'y']:
+                        data_dict[k] = np.asarray(v, dtype=float).T
+
+        np.save(data_path, np.asarray(data_dict['X'], dtype=np.float32))
+        np.save(labels_path, np.asarray(data_dict['y'], dtype=np.uint8))
+
+    elif dataset not in OTHER_DATASETS:
+        # TODO: Figure out how to download these
+        raise ValueError(f'dataset {dataset} not found.')
+
+    return
 
 
 def read(
@@ -68,27 +134,21 @@ def read(
     Returns the data and the labels.
     In the data, rows are instances, and columns are attributes.
     """
-    filename = get(dataset)
+    data_path = os.path.join(DATA_DIR, f'{dataset}.npy')
+    labels_path = os.path.join(DATA_DIR, f'{dataset}_labels.npy')
 
-    data_dict: Dict = dict()
-    try:
-        data_dict = loadmat(filename)
-    except (NotImplementedError, MatReadError):
-        import h5py
-        with h5py.File(filename, 'r') as fp:
-            for k, v in fp.items():
-                if k in ['X', 'y']:
-                    data_dict[k] = np.asarray(v, dtype=float).T
+    if not os.path.exists(data_path):
+        get(dataset)
 
-    data: np.array = np.asarray(data_dict['X'], dtype=float)
-    labels: np.array = np.asarray(data_dict['y'], dtype=int)
+    data: np.array = np.load(data_path)
+    labels: np.array = np.load(labels_path)
 
     if subsample is not None and subsample < data.shape[0]:
         outliers: List[int] = [i for i, j in enumerate(labels) if j == 1]
         inliers: List[int] = [i for i, j in enumerate(labels) if j == 0]
 
         samples: List[int] = list(np.random.choice(outliers, int(subsample * (len(outliers) / data.shape[0])), replace=False))
-        samples.extend(list(np.random.choice(inliers, int(subsample * (len(inliers) / data.shape[0])), replace=False)))
+        samples.extend(list(np.random.choice(inliers, 1 + int(subsample * (len(inliers) / data.shape[0])), replace=False)))
 
         data = np.asarray(data[samples], dtype=float)
         labels = np.asarray(labels[samples], dtype=int)
@@ -96,8 +156,9 @@ def read(
     if normalization_mode is not None:
         data = normalize(data, normalization_mode)
 
-    return data, np.squeeze(labels)
+    return np.asarray(data, dtype=np.float32), np.asarray(np.squeeze(labels), dtype=np.uint8)
 
 
 if __name__ == '__main__':
-    list(map(read, DATASETS.keys()))
+    print(f'downloadable datasets: {list(DATASET_LINKS.keys())}')
+    print(f'other datasets: {OTHER_DATASETS}')

@@ -4,6 +4,7 @@ import warnings
 from collections import Counter
 from typing import List
 
+import numpy as np
 from pyod.models import abod
 from pyod.models import auto_encoder
 from pyod.models import cblof
@@ -28,6 +29,18 @@ import datasets as chaoda_datasets
 from utils import *
 
 
+# TODO: Break out deep-learning based methods in a separate comparisons table.
+# TODO: Add the following deep-learning based methods to comparisons
+#  REPEN: Code bugs out because authors did not provide information on recreating their environment and version numbers for keras/tensorflow
+#  DAGMM: Deep Autoencoder with Gaussian Mixture Model. Can't find source code from authors. Also, model is weakly supervised.
+#  RDP: Random Distance Predicting. https://github.com/billhhh/RDP/
+#  AE-1SVM: https://github.com/minh-nghia/AE-1SVM  This would be a lot of work to get running because
+#                                                  the authors have a separate jupyter notebook for each dataset.
+#  DEC: Deep Embedded Clustering. https://github.com/piiswrong/dec  Implementation uses a custom build of Caffe from berkeley
+#  APE: can't find source code
+#  AEHE: Source code is in Korean
+
+
 def _neurons(dataset):
     """ This sets up default shapes for neural-network based methods
     that would crash without this as input.
@@ -36,11 +49,9 @@ def _neurons(dataset):
     """
     return [
         dataset.shape[1],
-        dataset.shape[1] // 2,
         dataset.shape[1] // 4,
         dataset.shape[1] // 8,
         dataset.shape[1] // 4,
-        dataset.shape[1] // 2,
         dataset.shape[1],
     ] if dataset.shape[1] > 32 else [
         dataset.shape[1],
@@ -51,9 +62,6 @@ def _neurons(dataset):
     ] if dataset.shape[1] > 8 else [
         dataset.shape[1],
         dataset.shape[1] // 2,
-        dataset.shape[1],
-    ] if dataset.shape[1] > 4 else [
-        dataset.shape[1],
         dataset.shape[1],
     ]
 
@@ -80,46 +88,48 @@ MODELS = {
 }
 
 
-@timeout(36_000)  # 10 hours
-def train_model(model, data):
-    start = time.time()
-    model.fit(data)
-    predictions = model.predict(data)
-    time_taken = float(time.time() - start)
-    return predictions, time_taken
+class TimeoutException(Exception):
+    pass
 
 
-# noinspection PyBroadException
-def run_model(model_name: str, datasets: List[str], scores_path: str, times_path: str):
-    scores: List[str] = list()
-    times: List[str] = list()
+# noinspection PyUnusedLocal
+def timeout_handler(signum, frame):
+    raise TimeoutException
+
+
+def run_model(model_name: str, datasets: List[str], max_time: int = 36_000):
+    import signal
+    signal.signal(signal.SIGALRM, timeout_handler)
+
     for dataset in datasets:
         data, labels = chaoda_datasets.read(dataset, NORMALIZE, SUB_SAMPLE)
         print_blurb(model_name, dataset, data.shape)
 
-        contamination: float = 0.1  # this is the default set by the authors of pyOD.
-        # this is supposed to be the points that are outliers. We feel that
+        contamination: float = 0.1  # This is the default set by the authors of pyOD.
+        # This is supposed to be the fraction of points that are outliers. We feel that
         # giving this information to an algorithm constitutes a form of cheating.
-        # if you are feeling generous towards our competitors, feel free to
-        # use the next line.
+        # If you are feeling generous towards our competitors, feel free to use the next line.
         # contamination: float = dict(Counter(labels))[1] / len(labels)
+
+        signal.alarm(max_time)
+        # noinspection PyBroadException
         try:
-            rankings, time_taken = train_model(MODELS[model_name](data, contamination), data)
-            score, time_taken = f'{roc_auc_score(labels, rankings):.3f}', f'{time_taken:.2f}'
-        except TimeoutError:
+            model = MODELS[model_name](data, contamination)
+            start = time.time()
+            model.fit(data)
+            rankings = model.predict(data)
+            time_taken = float(time.time() - start)
+            score = roc_auc_score(labels, rankings)
+        except TimeoutException:
             score, time_taken = 'TO', 'TO'
         except Exception as _:
             score, time_taken = 'EX', 'EX'
 
-        scores.append(score), times.append(time_taken)
-
-    scores: str = ','.join(scores)
-    with open(scores_path, 'a') as fp:
-        fp.write(f'{model_name},{scores}\n')
-
-    times: str = ','.join(times)
-    with open(times_path, 'a') as fp:
-        fp.write(f'{model_name},{times}\n')
+        scores_df, times_df = get_dataframes()
+        scores_df.at[model_name, dataset] = score
+        times_df.at[model_name, dataset] = time_taken
+        scores_df.to_csv(SCORES_PATH, float_format='%.2f')
+        times_df.to_csv(TIMES_PATH, float_format='%.2e')
     return
 
 
@@ -128,13 +138,5 @@ if __name__ == "__main__":
     np.random.seed(42), random.seed(42)
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
-    _datasets = list(sorted(list(chaoda_datasets.DATASETS.keys())))
-    # _datasets = ['vertebral']  # for testing
-
-    for _filename in [PYOD_SCORES_PATH, PYOD_TIMES_PATH]:
-        with open(_filename, 'w') as _fp:
-            _header = ','.join(_datasets)
-            _fp.write(f'model,{_header}\n')
-
     for _name in MODELS:
-        run_model(_name, _datasets, PYOD_SCORES_PATH, PYOD_TIMES_PATH)
+        run_model(_name, chaoda_datasets.DATASET_NAMES, 600)

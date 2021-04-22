@@ -1,14 +1,16 @@
+import os
 from typing import List
 
+import numpy as np
 import umap
 from matplotlib import pyplot as plt
 from sklearn import metrics
 
-from src.utils import *
+import utils
 
 
 def _directory(plot, metric, method) -> str:
-    dir_path = os.path.join(PLOTS_DIR, plot, method, metric)
+    dir_path = os.path.join(utils.PLOTS_DIR, plot, method, metric)
     if not os.path.exists(dir_path):
         os.makedirs(dir_path)
     return dir_path
@@ -135,7 +137,7 @@ def embed_umap(
     :param dataset: name of the dataset being reduced.
     :param metric: metric to use for the reduction.
     """
-    umap_path = os.path.join(UMAPS_DIR, f'{dataset}_{metric}.memmap')
+    umap_path = os.path.join(utils.UMAPS_DIR, f'{dataset}_{metric}.memmap')
     if not os.path.exists(umap_path):
         embedding: np.ndarray = umap.UMAP(
             n_components=n_components,
@@ -143,7 +145,7 @@ def embed_umap(
             metric=metric,
         ).fit_transform(data)
 
-        os.makedirs(UMAPS_DIR, exist_ok=True)
+        os.makedirs(utils.UMAPS_DIR, exist_ok=True)
         saver: np.memmap = np.memmap(
             filename=umap_path,
             dtype=float,

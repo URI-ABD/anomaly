@@ -1,18 +1,23 @@
+import os
 from typing import List
 
 import pandas as pd
 
-from src.datasets import DATASETS
-from src.utils import *
+import datasets as chaoda_datasets
+import utils
 
-TRAIN_DATASETS: List[str] = [
+TRAIN_DATASETS: List[str] = list(sorted([
     'annthyroid',
     'mnist',
     'pendigits',
     'satellite',
     'shuttle',
     'thyroid',
-]
+]))
+TEST_DATASETS: List[str] = list(sorted([
+    _d for _d in chaoda_datasets.DATASET_LINKS.keys()
+    if _d not in TRAIN_DATASETS
+]))
 
 
 def bold_best(values: List[str], *, margin: float = 0.02, high: bool = True) -> List[str]:
@@ -50,19 +55,6 @@ def bold_best(values: List[str], *, margin: float = 0.02, high: bool = True) -> 
     return values
 
 
-def get_path(mode: str, pyod: bool):
-    if mode == 'scores':
-        path: str = PYOD_SCORES_PATH if pyod else CHAODA_SCORES_PATH
-        high: bool = True
-    elif mode == 'times':
-        path: str = PYOD_TIMES_PATH if pyod else CHAODA_TIMES_PATH
-        high: bool = False
-    else:
-        raise ValueError(f'mode must be \'scores\' or \'times\'. Got {mode} instead.')
-
-    return path, high
-
-
 def bold_column(column: List[str]) -> List[str]:
     return [''.join(['\\textbf{' + c + '}']) for c in column]
 
@@ -73,19 +65,26 @@ def parse_csv(mode: str, datasets: List[str]):
         raise ValueError(f'mode must be \'scores\' or \'times\'. Got {mode} instead.')
 
     high = mode == 'scores'
-    path = SCORES_PATH if high else TIMES_PATH
+    path = utils.SCORES_PATH if high else utils.TIMES_PATH
     raw_df: pd.DataFrame = pd.read_csv(path, dtype=str)
 
     new_df: pd.DataFrame = pd.DataFrame()
-    new_df['model'] = list(raw_df['model'].values)
+    models = list(sorted(raw_df['model'].tolist()))
+    if 'CHAODA' in models:
+        models[models.index('CHAODA')] = models[0]
+        models[0] = 'CHAODA'
+    if 'CHAODA-Fast' in models:
+        models[models.index('CHAODA-Fast')] = models[1]
+        models[1] = 'CHAODA-Fast'
+
+    new_df['model'] = models
     for dataset in datasets:
-        dataset = 'mammo' if dataset == 'mammography' else dataset
-        new_df[dataset] = bold_best(list(raw_df[dataset].values), high=high)
+        short = chaoda_datasets.SHORT_NAMES[dataset]
+        new_df[short] = bold_best(raw_df[dataset].tolist(), high=high)
 
     return new_df, bold_column(list(new_df.columns))
 
 
-# noinspection DuplicatedCode
 def get_latex(mode: str, datasets: List[str]):
     df, columns = parse_csv(mode, datasets)
 
@@ -107,7 +106,7 @@ def get_latex(mode: str, datasets: List[str]):
 
 
 def write_tables():
-    out_path = os.path.join(RESULTS_DIR, 'latex')
+    out_path = os.path.join(utils.RESULTS_DIR, 'latex')
 
     def _write_tables(name: str, datasets: List[str]):
         path = f'{out_path}_scores_{name}.txt'
@@ -120,93 +119,12 @@ def write_tables():
 
         return
 
-    test_datasets = list(sorted([
-        dataset for dataset in DATASETS.keys()
-        if dataset not in TRAIN_DATASETS
-    ]))
-    half_num = len(test_datasets) // 2
+    half_num = len(TEST_DATASETS) // 2
 
     _write_tables('train', TRAIN_DATASETS)
-    _write_tables('test_1', test_datasets[:half_num])
-    _write_tables('test_2', test_datasets[half_num:])
-    return
-
-
-def parse_chaoda(mode: str, datasets: List[str]):
-    path, high = get_path(mode, False)
-    chaoda_df: pd.DataFrame = pd.read_csv(path, dtype=str)
-
-    new_df: pd.DataFrame = pd.DataFrame()
-    new_df['voting'] = chaoda_df['voting']
-    new_df['normed'] = chaoda_df['normed']
-    for dataset in datasets:
-        name = '\\textbf{' + dataset + '}'
-        new_df[name] = bold_best(list(chaoda_df[dataset].values), high=high)
-
-    return new_df, bold_column(list(new_df.columns))
-
-
-# noinspection DuplicatedCode
-def parse_pyod(mode: str, datasets: List[str]):
-    path, high = get_path(mode, True)
-    pyod_df: pd.DataFrame = pd.read_csv(path, dtype=str)
-
-    new_df: pd.DataFrame = pd.DataFrame()
-    new_df['\\textbf{model}'] = bold_column(list(pyod_df['model'].values))
-    for dataset in datasets:
-        name = '\\textbf{' + dataset + '}'
-        new_df[name] = bold_best(list(pyod_df[dataset].values), high=high)
-
-    return new_df, bold_column(list(new_df.columns))
-
-
-# noinspection DuplicatedCode
-def get_latex_old(mode: str, pyod: bool, datasets: List[str]):
-    """ Produces latex tables. """
-    # TODO: Do train-test1-test2 splits
-
-    df, columns = parse_pyod(mode, datasets) if pyod else parse_chaoda(mode, datasets)
-
-    latex_string: str = df.to_latex(
-        header=columns,
-        index=False,
-        column_format='|' + 'c|' * len(columns),
-        escape=False,
-    )
-    latex_list = latex_string.split('\n')
-    latex_list.pop(1)
-    latex_list.pop(2)
-    latex_list.pop(-3)
-
-    for i in range(len(latex_list[:-2]), 0, -1):
-        latex_list.insert(i, '\\hline')
-
-    return '\n'.join(latex_list)
-
-
-def write_tables_old():
-    num_datasets = len(DATASETS.keys())
-    step = num_datasets // 3
-    chaoda_path = os.path.join(RESULTS_DIR, 'latex_chaoda')
-    # pyod_path = os.path.join(RESULTS_DIR, 'latex_pyod')
-
-    for i, j in enumerate(range(0, num_datasets, step)):
-        datasets = list(DATASETS.keys())[j: j + step]
-        path = f'{chaoda_path}_scores_{i + 1}.txt'
-        with open(path, 'w') as fp:
-            fp.write(get_latex_old('scores', False, datasets))
-
-        path = f'{chaoda_path}_times_{i + 1}.txt'
-        with open(path, 'w') as fp:
-            fp.write(get_latex_old('times', False, datasets))
-
-        # path = f'{pyod_path}_scores_{i + 1}.txt'
-        # with open(path, 'w') as fp:
-        #     fp.write(get_latex('scores', True, datasets))
-        #
-        # path = f'{pyod_path}_times_{i + 1}.txt'
-        # with open(path, 'w') as fp:
-        #     fp.write(get_latex('times', True, datasets))
+    _write_tables('test_1', TEST_DATASETS[:half_num])
+    _write_tables('test_2', TEST_DATASETS[half_num:])
+    # _write_tables('test_3', chaoda_datasets.OTHER_DATASETS)
     return
 
 

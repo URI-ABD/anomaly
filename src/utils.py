@@ -1,79 +1,46 @@
-import errno
 import os
-import signal
-from functools import wraps
 from typing import Tuple
 
-import numpy as np
-from scipy.stats import gmean
-from scipy.stats import hmean
-
 SRC_DIR = os.path.abspath(os.path.dirname(__file__))
-DATA_DIR = os.path.join(SRC_DIR, 'data')
-CLAM_DIR = os.path.join(SRC_DIR, 'clam')
-TRAIN_DIR = os.path.join(SRC_DIR, 'train')
-RESULTS_DIR = os.path.join(SRC_DIR, 'results')
-PLOTS_DIR = os.path.join(SRC_DIR, 'plots')
-UMAPS_DIR = os.path.join(SRC_DIR, 'umaps')
+ROOT_DIR = os.path.dirname(SRC_DIR)
+DATA_DIR = os.path.join(ROOT_DIR, 'data')
+RESULTS_DIR = os.path.join(ROOT_DIR, 'results')
+PLOTS_DIR = os.path.join(ROOT_DIR, 'plots')
+UMAPS_DIR = os.path.join(ROOT_DIR, 'umaps')
 
-PYOD_SCORES_PATH = os.path.join(RESULTS_DIR, 'pyod_scores.csv')
-PYOD_TIMES_PATH = os.path.join(RESULTS_DIR, 'pyod_times.csv')
-CHAODA_SCORES_PATH = os.path.join(RESULTS_DIR, 'chaoda_scores.csv')
-CHAODA_TIMES_PATH = os.path.join(RESULTS_DIR, 'chaoda_times.csv')
-CHAODA_FAST_SCORES_PATH = os.path.join(RESULTS_DIR, 'chaoda_fast_scores.csv')
-CHAODA_FAST_TIMES_PATH = os.path.join(RESULTS_DIR, 'chaoda_fast_times.csv')
 SCORES_PATH = os.path.join(RESULTS_DIR, 'scores.csv')
 TIMES_PATH = os.path.join(RESULTS_DIR, 'times.csv')
 
 METRICS = ['cityblock', 'euclidean']
-
-MEANS = {
-    'amean': np.mean,
-    'gmean': gmean,
-    'hmean': hmean,
-}
-
-
 NORMALIZE = 'gaussian'
 SUB_SAMPLE = 64_000  # for testing the implementation
 MAX_DEPTH = 50  # even though no dataset reaches this far
 
 
+def get_dataframes():
+    import datasets
+    import pandas as pd
+
+    if not os.path.exists(SCORES_PATH):
+        scores_df = pd.DataFrame(columns=datasets.DATASET_NAMES)
+        scores_df.index.name = 'model'
+        times_df = pd.DataFrame(columns=datasets.DATASET_NAMES)
+        times_df.index.name = 'model'
+    else:
+        scores_df = pd.read_csv(SCORES_PATH, index_col='model')
+        times_df = pd.read_csv(TIMES_PATH, index_col='model')
+    return scores_df, times_df
+
+
 def print_blurb(model: str, dataset: str, shape: Tuple[int, int]):
     print()
     print('-' * 80)
-    print()
-    print(f'Running model {model} on dataset {dataset} with shape {shape}.')
-    print()
+    print(f'Running model {model} on dataset \'{dataset}\' with shape {shape}.')
     print('-' * 80)
+    print()
     return
 
 
-def manifold_path(dataset: str, metric: str) -> str:
-    """ Generate proper path to manifold. """
-    os.makedirs(CLAM_DIR, exist_ok=True)
-    return os.path.join(CLAM_DIR, f'{dataset}-{metric}.clam')
-
-
 def assign_min_points(num_points: int) -> int:
-    """ Improves runtime speed. set to 1 if willing to wait. """
+    """ Improves runtime speed without impacting scores. set to 1 if willing to wait. """
     return max((num_points // 1000), 1)
-
-
-def timeout(seconds, error_message=os.strerror(errno.ETIME)):
-    def decorator(func):
-        # noinspection PyUnusedLocal
-        def _handle_timeout(signum, frame):
-            raise TimeoutError(error_message)
-
-        def wrapper(*args, **kwargs):
-            signal.signal(signal.SIGALRM, _handle_timeout)
-            signal.alarm(seconds)
-            try:
-                result = func(*args, **kwargs)
-            finally:
-                signal.alarm(0)
-            return result
-
-        return wraps(func)(wrapper)
-    return decorator
